@@ -4,11 +4,15 @@ const fsSync = require('fs');
 const path = require('path');
 
 const client = new Client({
-  host: 'localhost',
-  port: 5433,
+  host: 'db.puzzleinteract.com',
+  port: 5432,
   database: 'puzzle_db',
   user: 'puzzle_user',
   password: 'puzzle_password',
+  ssl: {
+    require: true,
+    rejectUnauthorized: false // Set to false if using self-signed certificates
+  }
 });
 
 const LAST_ID_FILE = path.join(__dirname, 'lastId.txt');
@@ -40,23 +44,33 @@ class Logger {
     const timestamp = this.getTimestamp();
     const logMessage = `[${timestamp}] ${message}\n`;
     
+    // Always output to console
+    console.log(message);
+    
     try {
       if (this.logStream) {
         this.logStream.write(logMessage);
-      } else {
-        // Fallback to console if stream not initialized
-        console.log(message);
       }
     } catch (error) {
       // Fallback to console on error
       console.error('Logging error:', error.message);
-      console.log(message);
     }
   }
 
   error(message, error = null) {
     const errorMessage = error ? `${message}: ${error.message || error}` : message;
-    this.log(`ERROR: ${errorMessage}`);
+    const fullErrorMessage = `ERROR: ${errorMessage}`;
+    // Use console.error for errors, then log to file
+    console.error(fullErrorMessage);
+    const timestamp = this.getTimestamp();
+    const logMessage = `[${timestamp}] ${fullErrorMessage}\n`;
+    try {
+      if (this.logStream) {
+        this.logStream.write(logMessage);
+      }
+    } catch (err) {
+      // Ignore logging errors
+    }
   }
 
   close() {
@@ -93,37 +107,38 @@ async function saveLastId(lastId) {
 }
 
 async function batchUpdate() {
+  let lastId = null; // Declare outside try block so it's accessible in catch block
+  
   try {
     logger.initialize();
     await client.connect();
     logger.log('Connected to database');
 
     // Load lastId from file or start from null
-    let lastId = await loadLastId();
+    lastId = await loadLastId();
     if (lastId) {
       logger.log(`Resuming from lastId: ${lastId}`);
     }
 
     let totalUpdated = 0;
-    let totalInserted = 0;
     let batchNumber = 1;
     const batchSize = 1000;
 
     while (true) {
-      // Select rows from dictionary_v2 with cursor-based paging
-      // We'll process all words from dictionary_v2
+      // Select rows from dictionary_v4_french with cursor-based paging
+      // We'll process all rows from dictionary_v4_french
       const selectQuery = lastId
         ? `
-          SELECT d2.id, d2.word, d2.meaning, d2.relations
-          FROM dictionary_v2 d2
-          WHERE d2.id > $1::uuid
-          ORDER BY d2.id
+          SELECT id, word, meaning, created_at, source, language, word_norm
+          FROM dictionary_v4_french
+          WHERE id > $1::uuid
+          ORDER BY id
           LIMIT $2
         `
         : `
-          SELECT d2.id, d2.word, d2.meaning, d2.relations
-          FROM dictionary_v2 d2
-          ORDER BY d2.id
+          SELECT id, word, meaning, created_at, source, language, word_norm
+          FROM dictionary_v4_french
+          ORDER BY id
           LIMIT $1
         `;
 
@@ -138,58 +153,64 @@ async function batchUpdate() {
 
       logger.log(`Batch ${batchNumber}: Processing ${result.rows.length} rows...`);
 
-      let batchUpdated = 0;
       let batchInserted = 0;
+      let batchUpdated = 0;
 
-      // Process each row: update meaning if word exists, insert new row if it doesn't
+      // Process each row: insert or update in dictionary table
       for (const row of result.rows) {
-        // Check if word already exists in dictionary
-        const checkQuery = `SELECT id FROM dictionary WHERE word = $1 LIMIT 1`;
-        const checkResult = await client.query(checkQuery, [row.word]);
+        // Check if record exists
+        const checkQuery = `SELECT id FROM dictionary WHERE id = $1`;
+        const checkResult = await client.query(checkQuery, [row.id]);
         
         if (checkResult.rows.length > 0) {
-          // Word exists - update the meaning and relations columns
+          // Record exists - update it
           const updateQuery = `
             UPDATE dictionary
-            SET meaning = $1, relations = $2
-            WHERE word = $3
+            SET word = $1,
+                meaning = $2,
+                created_at = $3,
+                source = $4,
+                language = $5,
+                word_norm = $6
+            WHERE id = $7
           `;
-          await client.query(updateQuery, [row.meaning, row.relations || null, row.word]);
-          batchUpdated++;
-        } else {
-          // Word doesn't exist - insert new row with all required columns
-          const insertQuery = `
-            INSERT INTO dictionary (id, word, meaning, created_at, source, language, relations)
-            VALUES (
-              gen_random_uuid(),
-              $1,
-              $2,
-              NOW(),
-              'wiktionary',
-              'english',
-              $3
-            )
-          `;
-          await client.query(insertQuery, [
+          await client.query(updateQuery, [
             row.word,
             row.meaning,
-            row.relations || null
+            row.created_at,
+            row.source,
+            row.language,
+            row.word_norm,
+            row.id
+          ]);
+          batchUpdated++;
+        } else {
+          // Record doesn't exist - insert it
+          const insertQuery = `
+            INSERT INTO dictionary (id, word, meaning, created_at, source, language, word_norm)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `;
+          await client.query(insertQuery, [
+            row.id,
+            row.word,
+            row.meaning,
+            row.created_at,
+            row.source,
+            row.language,
+            row.word_norm
           ]);
           batchInserted++;
         }
       }
 
-      totalUpdated += batchUpdated;
-      totalInserted += batchInserted;
+      const batchTotal = batchInserted + batchUpdated;
+      totalUpdated += batchTotal;
 
-      logger.log(`  Updated ${batchUpdated} rows in this batch`);
-      logger.log(`  Inserted ${batchInserted} rows in this batch`);
-      logger.log(`  Total updated so far: ${totalUpdated}`);
-      console.log(`  Total updated so far: ${totalUpdated}`);
-      logger.log(`  Total inserted so far: ${totalInserted}`);
-      console.log(`  Total inserted so far: ${totalInserted}`);
+      logger.log(`  Inserted ${batchInserted} rows, Updated ${batchUpdated} rows in this batch`);
+      logger.log(`  Total processed so far: ${totalUpdated}`);
+      console.log(`  Total processed so far: ${totalUpdated}`);
 
-      // Update lastId for next iteration - use the last ID from dictionary_v2
+      // Update lastId for next iteration - use the last ID from dictionary_v4_french
       if (result.rows.length > 0) {
         lastId = result.rows[result.rows.length - 1].id;
         await saveLastId(lastId);
@@ -204,9 +225,7 @@ async function batchUpdate() {
     }
 
     logger.log('=== Final Summary ===');
-    logger.log(`Total rows updated: ${totalUpdated}`);
-    logger.log(`Total rows inserted: ${totalInserted}`);
-    logger.log(`Total rows processed: ${totalUpdated + totalInserted}`);
+    logger.log(`Total rows copied (inserted/updated): ${totalUpdated}`);
     logger.log(`Total batches processed: ${batchNumber - 1}`);
     
     // Clear lastId file when complete
