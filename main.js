@@ -129,14 +129,14 @@ async function batchUpdate() {
       // We'll process all rows from dictionary_v4_french
       const selectQuery = lastId
         ? `
-          SELECT id, word, meaning, created_at, source, language, word_norm
+          SELECT id, word, meaning, created_at, source, language, word_norm, relations
           FROM dictionary_v4_french
           WHERE id > $1::uuid
           ORDER BY id
           LIMIT $2
         `
         : `
-          SELECT id, word, meaning, created_at, source, language, word_norm
+          SELECT id, word, meaning, created_at, source, language, word_norm, relations
           FROM dictionary_v4_french
           ORDER BY id
           LIMIT $1
@@ -171,8 +171,9 @@ async function batchUpdate() {
                 created_at = $3,
                 source = $4,
                 language = $5,
-                word_norm = $6
-            WHERE id = $7
+                word_norm = $6,
+                relations = $7
+            WHERE id = $8
           `;
           await client.query(updateQuery, [
             row.word,
@@ -181,14 +182,15 @@ async function batchUpdate() {
             row.source,
             row.language,
             row.word_norm,
+            row.relations,
             row.id
           ]);
           batchUpdated++;
         } else {
           // Record doesn't exist - insert it
           const insertQuery = `
-            INSERT INTO dictionary (id, word, meaning, created_at, source, language, word_norm)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO dictionary (id, word, meaning, created_at, source, language, word_norm, relations)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `;
           await client.query(insertQuery, [
             row.id,
@@ -197,7 +199,8 @@ async function batchUpdate() {
             row.created_at,
             row.source,
             row.language,
-            row.word_norm
+            row.word_norm,
+            row.relations
           ]);
           batchInserted++;
         }
