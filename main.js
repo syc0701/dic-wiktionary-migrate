@@ -1,7 +1,7 @@
 const { Client } = require('pg');
 const fs = require('fs').promises;
-const fsSync = require('fs');
 const path = require('path');
+const Logger = require('./logger');
 
 const client = new Client({
   host: 'db.puzzleinteract.com',
@@ -17,73 +17,6 @@ const client = new Client({
 
 const LAST_ID_FILE = path.join(__dirname, 'lastId.txt');
 const LOG_FILE = path.join(__dirname, 'migration.log');
-
-// Logging utility
-class Logger {
-  constructor(logFile) {
-    this.logFile = logFile;
-    this.logStream = null;
-  }
-
-  initialize() {
-    try {
-      // Open log file in append mode
-      this.logStream = fsSync.createWriteStream(this.logFile, { flags: 'a' });
-      this.log('=== Migration started ===');
-    } catch (error) {
-      // Fallback to console if file logging fails
-      console.error('Failed to initialize log file:', error.message);
-    }
-  }
-
-  getTimestamp() {
-    return new Date().toISOString();
-  }
-
-  log(message) {
-    const timestamp = this.getTimestamp();
-    const logMessage = `[${timestamp}] ${message}\n`;
-    
-    // Always output to console
-    console.log(message);
-    
-    try {
-      if (this.logStream) {
-        this.logStream.write(logMessage);
-      }
-    } catch (error) {
-      // Fallback to console on error
-      console.error('Logging error:', error.message);
-    }
-  }
-
-  error(message, error = null) {
-    const errorMessage = error ? `${message}: ${error.message || error}` : message;
-    const fullErrorMessage = `ERROR: ${errorMessage}`;
-    // Use console.error for errors, then log to file
-    console.error(fullErrorMessage);
-    const timestamp = this.getTimestamp();
-    const logMessage = `[${timestamp}] ${fullErrorMessage}\n`;
-    try {
-      if (this.logStream) {
-        this.logStream.write(logMessage);
-      }
-    } catch (err) {
-      // Ignore logging errors
-    }
-  }
-
-  close() {
-    try {
-      if (this.logStream) {
-        this.log('=== Migration ended ===\n');
-        this.logStream.end();
-      }
-    } catch (error) {
-      console.error('Error closing log file:', error.message);
-    }
-  }
-}
 
 const logger = new Logger(LOG_FILE);
 
@@ -125,19 +58,19 @@ async function batchUpdate() {
     const batchSize = 1000;
 
     while (true) {
-      // Select rows from dictionary_v4_french with cursor-based paging
-      // We'll process all rows from dictionary_v4_french
+      // Select rows from dictionary_v5_english with cursor-based paging
+      // We'll process all rows from dictionary_v5_english
       const selectQuery = lastId
         ? `
           SELECT id, word, meaning, created_at, source, language, word_norm, relations
-          FROM dictionary_v4_french
+          FROM dictionary_v5_english
           WHERE id > $1::uuid
           ORDER BY id
           LIMIT $2
         `
         : `
           SELECT id, word, meaning, created_at, source, language, word_norm, relations
-          FROM dictionary_v4_french
+          FROM dictionary_v5_english
           ORDER BY id
           LIMIT $1
         `;
@@ -158,9 +91,9 @@ async function batchUpdate() {
 
       // Process each row: insert or update in dictionary table
       for (const row of result.rows) {
-        // Check if record exists
-        const checkQuery = `SELECT id FROM dictionary WHERE id = $1`;
-        const checkResult = await client.query(checkQuery, [row.id]);
+        // Check if record exists by word
+        const checkQuery = `SELECT id FROM dictionary WHERE word = $1`;
+        const checkResult = await client.query(checkQuery, [row.word]);
         
         if (checkResult.rows.length > 0) {
           // Record exists - update it
@@ -172,8 +105,9 @@ async function batchUpdate() {
                 source = $4,
                 language = $5,
                 word_norm = $6,
-                relations = $7
-            WHERE id = $8
+                relations = $7,
+                updated_at = NOW()
+            WHERE word = $8
           `;
           await client.query(updateQuery, [
             row.word,
@@ -183,7 +117,7 @@ async function batchUpdate() {
             row.language,
             row.word_norm,
             row.relations,
-            row.id
+            row.word
           ]);
           batchUpdated++;
         } else {
@@ -211,9 +145,8 @@ async function batchUpdate() {
 
       logger.log(`  Inserted ${batchInserted} rows, Updated ${batchUpdated} rows in this batch`);
       logger.log(`  Total processed so far: ${totalUpdated}`);
-      console.log(`  Total processed so far: ${totalUpdated}`);
 
-      // Update lastId for next iteration - use the last ID from dictionary_v4_french
+      // Update lastId for next iteration - use the last ID from dictionary_v5_english
       if (result.rows.length > 0) {
         lastId = result.rows[result.rows.length - 1].id;
         await saveLastId(lastId);
