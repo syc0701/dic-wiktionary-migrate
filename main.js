@@ -20,6 +20,15 @@ const LOG_FILE = path.join(__dirname, 'migration.log');
 
 const logger = new Logger(LOG_FILE);
 
+// Sanitize string by removing null bytes (0x00) which PostgreSQL doesn't allow in text fields
+function sanitizeString(str) {
+  if (str === null || str === undefined) {
+    return str;
+  }
+  // Remove null bytes from the string
+  return str.replace(/\0/g, '');
+}
+
 async function loadLastId() {
   try {
     const data = await fs.readFile(LAST_ID_FILE, 'utf8');
@@ -91,9 +100,17 @@ async function batchUpdate() {
 
       // Process each row: insert or update in dictionary table
       for (const row of result.rows) {
+        // Sanitize all text fields to remove null bytes
+        const sanitizedWord = sanitizeString(row.word);
+        const sanitizedMeaning = sanitizeString(row.meaning);
+        const sanitizedSource = sanitizeString(row.source);
+        const sanitizedLanguage = sanitizeString(row.language);
+        const sanitizedWordNorm = sanitizeString(row.word_norm);
+        const sanitizedRelations = sanitizeString(row.relations);
+        
         // Check if record exists by word
         const checkQuery = `SELECT id FROM dictionary WHERE word = $1`;
-        const checkResult = await client.query(checkQuery, [row.word]);
+        const checkResult = await client.query(checkQuery, [sanitizedWord]);
         
         if (checkResult.rows.length > 0) {
           // Record exists - update it
@@ -110,14 +127,14 @@ async function batchUpdate() {
             WHERE word = $8
           `;
           await client.query(updateQuery, [
-            row.word,
-            row.meaning,
+            sanitizedWord,
+            sanitizedMeaning,
             row.created_at,
-            row.source,
-            row.language,
-            row.word_norm,
-            row.relations,
-            row.word
+            sanitizedSource,
+            sanitizedLanguage,
+            sanitizedWordNorm,
+            sanitizedRelations,
+            sanitizedWord
           ]);
           batchUpdated++;
         } else {
@@ -128,13 +145,13 @@ async function batchUpdate() {
           `;
           await client.query(insertQuery, [
             row.id,
-            row.word,
-            row.meaning,
+            sanitizedWord,
+            sanitizedMeaning,
             row.created_at,
-            row.source,
-            row.language,
-            row.word_norm,
-            row.relations
+            sanitizedSource,
+            sanitizedLanguage,
+            sanitizedWordNorm,
+            sanitizedRelations
           ]);
           batchInserted++;
         }
