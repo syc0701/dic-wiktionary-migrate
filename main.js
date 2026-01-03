@@ -2,6 +2,7 @@ const { Client } = require('pg');
 const fs = require('fs').promises;
 const path = require('path');
 const Logger = require('./logger');
+const config = require('./config');
 
 const client = new Client({
   host: 'db.puzzleinteract.com',
@@ -65,32 +66,46 @@ async function batchUpdate() {
     if (lastId) {
       logger.log(`Resuming from lastId: ${lastId}`);
     }
+    
+    if (config.language) {
+      logger.log(`Language filter active: only processing rows with language = '${config.language}'`);
+    }
 
     let totalUpdated = 0;
     let batchNumber = 1;
     const batchSize = 1000;
 
     while (true) {
-      // Select rows from dictionary_v5_english with cursor-based paging
-      // We'll process all rows from dictionary_v5_english
-      const selectQuery = lastId
-        ? `
-          SELECT id, word, meaning, created_at, source, language, word_norm, relations
-          FROM dictionary_v5_english
-          WHERE id > $1::uuid
-          ORDER BY id
-          LIMIT $2
-        `
-        : `
-          SELECT id, word, meaning, created_at, source, language, word_norm, relations
-          FROM dictionary_v5_english
-          ORDER BY id
-          LIMIT $1
-        `;
-
-      const result = lastId
-        ? await client.query(selectQuery, [lastId, batchSize])
-        : await client.query(selectQuery, [batchSize]);
+      // Select rows from source table with cursor-based paging
+      // Build WHERE clause based on lastId and language filter
+      let whereClause = '';
+      let queryParams = [];
+      
+      if (config.language) {
+        if (lastId) {
+          whereClause = 'WHERE id > $1::uuid AND language = $2';
+          queryParams = [lastId, config.language];
+        } else {
+          whereClause = 'WHERE language = $1';
+          queryParams = [config.language];
+        }
+      } else {
+        if (lastId) {
+          whereClause = 'WHERE id > $1::uuid';
+          queryParams = [lastId];
+        }
+      }
+      
+      const selectQuery = `
+        SELECT id, word, meaning, created_at, source, language, word_norm, relations
+        FROM ${config.sourceTable}
+        ${whereClause}
+        ORDER BY id
+        LIMIT $${queryParams.length + 1}
+      `;
+      
+      queryParams.push(batchSize);
+      const result = await client.query(selectQuery, queryParams);
 
       if (result.rows.length === 0) {
         logger.log('No more rows to process. Process complete!');
@@ -113,14 +128,14 @@ async function batchUpdate() {
         const meaning = row.meaning;
         const relations = row.relations;
         
-        // Check if record exists by word
-        const checkQuery = `SELECT id FROM dictionary WHERE word = $1`;
-        const checkResult = await client.query(checkQuery, [sanitizedWord]);
+        // Check if record exists by word and language
+        const checkQuery = `SELECT id FROM ${config.targetTable} WHERE word = $1 AND language = $2`;
+        const checkResult = await client.query(checkQuery, [sanitizedWord, sanitizedLanguage]);
         
         if (checkResult.rows.length > 0) {
           // Record exists - update it
           const updateQuery = `
-            UPDATE dictionary
+            UPDATE ${config.targetTable}
             SET word = $1,
                 meaning = $2,
                 created_at = $3,
@@ -129,7 +144,7 @@ async function batchUpdate() {
                 word_norm = $6,
                 relations = $7,
                 updated_at = NOW()
-            WHERE word = $8
+            WHERE word = $8 AND language = $9
           `;
           await client.query(updateQuery, [
             sanitizedWord,
@@ -139,13 +154,14 @@ async function batchUpdate() {
             sanitizedLanguage,
             sanitizedWordNorm,
             relations,
-            sanitizedWord
+            sanitizedWord,
+            sanitizedLanguage
           ]);
           batchUpdated++;
         } else {
           // Record doesn't exist - insert it
           const insertQuery = `
-            INSERT INTO dictionary (id, word, meaning, created_at, source, language, word_norm, relations)
+            INSERT INTO ${config.targetTable} (id, word, meaning, created_at, source, language, word_norm, relations)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `;
           await client.query(insertQuery, [
@@ -168,7 +184,7 @@ async function batchUpdate() {
       logger.log(`  Inserted ${batchInserted} rows, Updated ${batchUpdated} rows in this batch`);
       logger.log(`  Total processed so far: ${totalUpdated}`);
 
-      // Update lastId for next iteration - use the last ID from dictionary_v5_english
+      // Update lastId for next iteration - use the last ID from source table
       if (result.rows.length > 0) {
         lastId = result.rows[result.rows.length - 1].id;
         await saveLastId(lastId);
