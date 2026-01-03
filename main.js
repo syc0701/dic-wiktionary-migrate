@@ -104,13 +104,14 @@ async function batchUpdate() {
 
       // Process each row: insert or update in dictionary table
       for (const row of result.rows) {
-        // Sanitize all text fields to remove null bytes
+        // Sanitize text fields to remove null bytes (meaning and relations are JSON, so skip sanitization)
         const sanitizedWord = sanitizeString(row.word);
-        const sanitizedMeaning = sanitizeString(row.meaning);
         const sanitizedSource = sanitizeString(row.source);
         const sanitizedLanguage = sanitizeString(row.language);
         const sanitizedWordNorm = sanitizeString(row.word_norm);
-        const sanitizedRelations = sanitizeString(row.relations);
+        // meaning and relations are JSON, pass them through as-is
+        const meaning = row.meaning;
+        const relations = row.relations;
         
         // Check if record exists by word
         const checkQuery = `SELECT id FROM dictionary WHERE word = $1`;
@@ -132,12 +133,12 @@ async function batchUpdate() {
           `;
           await client.query(updateQuery, [
             sanitizedWord,
-            sanitizedMeaning,
+            meaning,
             row.created_at,
             sanitizedSource,
             sanitizedLanguage,
             sanitizedWordNorm,
-            sanitizedRelations,
+            relations,
             sanitizedWord
           ]);
           batchUpdated++;
@@ -150,12 +151,12 @@ async function batchUpdate() {
           await client.query(insertQuery, [
             row.id,
             sanitizedWord,
-            sanitizedMeaning,
+            meaning,
             row.created_at,
             sanitizedSource,
             sanitizedLanguage,
             sanitizedWordNorm,
-            sanitizedRelations
+            relations
           ]);
           batchInserted++;
         }
