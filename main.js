@@ -25,6 +25,10 @@ function sanitizeString(str) {
   if (str === null || str === undefined) {
     return str;
   }
+  // Convert to string if it's not already a string
+  if (typeof str !== 'string') {
+    str = String(str);
+  }
   // Remove null bytes from the string
   return str.replace(/\0/g, '');
 }
