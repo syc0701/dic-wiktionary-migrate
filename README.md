@@ -80,3 +80,7 @@ node main.js
 
 [Add your license here]
 
+
+```bash
+ps aux | grep '[n]ode main.js'
+```

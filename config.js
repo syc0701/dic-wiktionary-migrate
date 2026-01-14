@@ -1,6 +1,5 @@
 module.exports = {
-  sourceTable: 'dictionary_v4_french',
+  sourceTable: 'dictionary_v7',
   targetTable: 'dictionary',
-  language: 'french'
+  language: 'all' // Set to 'all' to migrate all rows, or specify a language like 'french', 'english', etc.
 };
-

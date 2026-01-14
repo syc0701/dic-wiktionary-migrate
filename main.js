@@ -55,7 +55,7 @@ async function saveLastId(lastId) {
 
 async function batchUpdate() {
   let lastId = null; // Declare outside try block so it's accessible in catch block
-  
+
   try {
     logger.initialize();
     await client.connect();
@@ -66,9 +66,11 @@ async function batchUpdate() {
     if (lastId) {
       logger.log(`Resuming from lastId: ${lastId}`);
     }
-    
-    if (config.language) {
+
+    if (config.language && config.language.toLowerCase() !== 'all') {
       logger.log(`Language filter active: only processing rows with language = '${config.language}'`);
+    } else {
+      logger.log('Processing all rows regardless of language');
     }
 
     let totalUpdated = 0;
@@ -80,8 +82,9 @@ async function batchUpdate() {
       // Build WHERE clause based on lastId and language filter
       let whereClause = '';
       let queryParams = [];
-      
-      if (config.language) {
+
+      if (config.language && config.language.toLowerCase() !== 'all') {
+        // Language filter is active (not 'all')
         if (lastId) {
           whereClause = 'WHERE id > $1::uuid AND language = $2';
           queryParams = [lastId, config.language];
@@ -90,12 +93,13 @@ async function batchUpdate() {
           queryParams = [config.language];
         }
       } else {
+        // No language filter or language is 'all' - process all rows
         if (lastId) {
           whereClause = 'WHERE id > $1::uuid';
           queryParams = [lastId];
         }
       }
-      
+
       const selectQuery = `
         SELECT id, word, meaning, created_at, source, language, word_norm, relations
         FROM ${config.sourceTable}
@@ -103,7 +107,7 @@ async function batchUpdate() {
         ORDER BY id
         LIMIT $${queryParams.length + 1}
       `;
-      
+
       queryParams.push(batchSize);
       const result = await client.query(selectQuery, queryParams);
 
@@ -127,29 +131,27 @@ async function batchUpdate() {
         // meaning and relations are JSON, pass them through as-is
         const meaning = row.meaning;
         const relations = row.relations;
-        
+
         // Check if record exists by word and language
         const checkQuery = `SELECT id FROM ${config.targetTable} WHERE word = $1 AND language = $2`;
         const checkResult = await client.query(checkQuery, [sanitizedWord, sanitizedLanguage]);
-        
+
         if (checkResult.rows.length > 0) {
           // Record exists - update it
           const updateQuery = `
             UPDATE ${config.targetTable}
             SET word = $1,
                 meaning = $2,
-                created_at = $3,
-                source = $4,
-                language = $5,
-                word_norm = $6,
-                relations = $7,
+                source = $3,
+                language = $4,
+                word_norm = $5,
+                relations = $6,
                 updated_at = NOW()
-            WHERE word = $8 AND language = $9
+            WHERE word = $7 AND language = $8
           `;
           await client.query(updateQuery, [
             sanitizedWord,
             meaning,
-            row.created_at,
             sanitizedSource,
             sanitizedLanguage,
             sanitizedWordNorm,
@@ -201,7 +203,7 @@ async function batchUpdate() {
     logger.log('=== Final Summary ===');
     logger.log(`Total rows copied (inserted/updated): ${totalUpdated}`);
     logger.log(`Total batches processed: ${batchNumber - 1}`);
-    
+
     // Clear lastId file when complete
     try {
       await fs.unlink(LAST_ID_FILE);
