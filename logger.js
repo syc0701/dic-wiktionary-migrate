@@ -9,8 +9,10 @@ class Logger {
 
   initialize() {
     try {
-      // Open log file in append mode
-      this.logStream = fsSync.createWriteStream(this.logFile, { flags: 'a' });
+      // Open log file in append mode if logFile is provided
+      if (this.logFile) {
+        this.logStream = fsSync.createWriteStream(this.logFile, { flags: 'a' });
+      }
       this.log('=== Migration started ===');
     } catch (error) {
       // Fallback to console if file logging fails

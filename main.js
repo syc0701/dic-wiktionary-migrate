@@ -17,9 +17,8 @@ const client = new Client({
 });
 
 const LAST_ID_FILE = path.join(__dirname, 'lastId.txt');
-const LOG_FILE = path.join(__dirname, 'migration.log');
 
-const logger = new Logger(LOG_FILE);
+const logger = new Logger(null);
 
 // Sanitize string by removing null bytes (0x00) which PostgreSQL doesn't allow in text fields
 function sanitizeString(str) {
