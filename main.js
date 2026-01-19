@@ -100,7 +100,7 @@ async function batchUpdate() {
       }
 
       const selectQuery = `
-        SELECT id, word, meaning, created_at, source, language, word_norm, relations
+        SELECT id, word, meaning, created_at, source, language, word_norm, relations, is_proper, word_case
         FROM ${config.sourceTable}
         ${whereClause}
         ORDER BY id
@@ -127,9 +127,11 @@ async function batchUpdate() {
         const sanitizedSource = sanitizeString(row.source);
         const sanitizedLanguage = sanitizeString(row.language);
         const sanitizedWordNorm = sanitizeString(row.word_norm);
+        const sanitizedWordCase = sanitizeString(row.word_case);
         // meaning and relations are JSON, pass them through as-is
         const meaning = row.meaning;
         const relations = row.relations;
+        const isProper = row.is_proper;
 
         // Check if record exists by word and language
         const checkQuery = `SELECT id FROM ${config.targetTable} WHERE word = $1 AND language = $2`;
@@ -145,8 +147,10 @@ async function batchUpdate() {
                 language = $4,
                 word_norm = $5,
                 relations = $6,
+                is_proper = $7,
+                word_case = $8,
                 updated_at = NOW()
-            WHERE word = $7 AND language = $8
+            WHERE word = $9 AND language = $10
           `;
           await client.query(updateQuery, [
             sanitizedWord,
@@ -155,6 +159,8 @@ async function batchUpdate() {
             sanitizedLanguage,
             sanitizedWordNorm,
             relations,
+            isProper,
+            sanitizedWordCase,
             sanitizedWord,
             sanitizedLanguage
           ]);
@@ -162,8 +168,8 @@ async function batchUpdate() {
         } else {
           // Record doesn't exist - insert it
           const insertQuery = `
-            INSERT INTO ${config.targetTable} (id, word, meaning, created_at, source, language, word_norm, relations)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO ${config.targetTable} (id, word, meaning, created_at, source, language, word_norm, relations, is_proper, word_case)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           `;
           await client.query(insertQuery, [
             row.id,
@@ -173,7 +179,9 @@ async function batchUpdate() {
             sanitizedSource,
             sanitizedLanguage,
             sanitizedWordNorm,
-            relations
+            relations,
+            isProper,
+            sanitizedWordCase
           ]);
           batchInserted++;
         }
